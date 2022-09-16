@@ -1,7 +1,10 @@
 ﻿using Abp.Runtime.Security;
 using EcomApp.Configuration.CacheMemory;
-using EcomApp.Configuration.Json;
+using EcomApp.Configuration.JsonConfig;
 using EcomApp.Models.Users;
+using EcomApp.Services.User;
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Extensions;
 using Microsoft.AspNetCore.Identity;
@@ -27,13 +30,15 @@ namespace EcomApp.Controllers.User
         private readonly IConfiguration _configuration;
         private static string DefaultPassPhrase = "Encrypt Token Strongly";
         private readonly Ijson _json;
-        public UserController(UserManager<ApplicationUser> userManager, SignInManager<ApplicationUser> signInManager, ICacheMemory cacheMemory, IConfiguration configuration, Ijson ijson)
+        private readonly IUserService _userService;
+        public UserController(UserManager<ApplicationUser> userManager,IUserService userService, SignInManager<ApplicationUser> signInManager, ICacheMemory cacheMemory, IConfiguration configuration, Ijson ijson)
         {
             _userManager = userManager;
             _signInManager = signInManager;
             _cacheMemory = cacheMemory;
             _configuration = configuration;
             _json = ijson;
+            _userService = userService;
         }
         [HttpPost]
         [Route("api/[controller]/{version}/account/register")]
@@ -93,7 +98,7 @@ namespace EcomApp.Controllers.User
         }
         [HttpPost]
         [Route("api/[controller]/{version}/account/authentication")]
-        public async Task<IActionResult> Authenticate([FromBody] userLogin_Model login_Model, string version)
+        public async Task<IActionResult> Loggedinuser([FromBody] userLogin_Model login_Model, string version)
         {
             if (ModelState.IsValid && version == "1.0")
             {
@@ -139,8 +144,8 @@ namespace EcomApp.Controllers.User
 
                         var generateToken = new JwtSecurityTokenHandler().WriteToken(token);
                         var encrptytoken = GetEncryptedAccessToken(stringtoken);
-                        var LoggedinData = _json.JsonSerializer(username);
-                        _cacheMemory.SavedCache("userLoggedinData", LoggedinData);
+                        var usersdata = _json.JsonSerializer(_userService.getalluser());
+                        _cacheMemory.SavedCache(_configuration["CacheKey:User"], usersdata);
                         //await _activityLogsService.storeactivityinDB(5, username.Id, UserEnums.User_Logged_In.ToString(), url, Payload, methodType, "", json, ClientIPAddr, "Authentication");
                         //_logger.LogInfo($"User loggedin  with Email {login_Model.User_Email}, Success, Post Request");
                         return Ok(
@@ -170,6 +175,102 @@ namespace EcomApp.Controllers.User
         private string GetEncryptedAccessToken(string accessToken)
         {
             return SimpleStringCipher.Instance.Encrypt(accessToken, DefaultPassPhrase);
+        }
+        [HttpPost]
+        [Authorize(AuthenticationSchemes = JwtBearerDefaults.AuthenticationScheme)]
+        [Route("api/[controller]/{version}/account/signout")]
+        public async Task<IActionResult> SignOut(string version)
+        {
+            if (version == null)
+            {
+                return BadRequest(new { Message = "Failed", Status = StatusCodes.Status400BadRequest, Result = "Request not Valid, Please Try Again" });
+            }
+            else
+            {
+                await _signInManager.SignOutAsync();
+                var removecacheforuser = await _cacheMemory.RemoveDatafromCache("userData");
+                if(removecacheforuser != false)
+                {
+                    return Ok(new { Message = "Success", Status = StatusCodes.Status200OK, Result = " User SignOut Successfully ...! " });
+                }
+                return StatusCode(StatusCodes.Status404NotFound , new { Message = "Failed", Status = StatusCodes.Status404NotFound, Result = "User Signout Already" });
+            }
+        }
+        [HttpPost]
+        [Route("api/[controller]/{version}/account/generatepasswordlink")]
+        public async Task<IActionResult> GeneratePasswordResetLink(string email, string version)
+        {
+            if(email == null && version == null)
+            {
+                return NotFound(new { Message = "Failed", Status = StatusCodes.Status404NotFound, Result = "Email is not provided Please Try again..!" });
+            }
+            else
+            {
+                var user = await _userManager.FindByEmailAsync(email);
+                //var userRoles = await _userManager.GetRolesAsync(user);
+                if (user != null && await _userManager.IsEmailConfirmedAsync(user)) /*&& /*userRoles.Contains("Admin")*/
+                {
+                    var passwordToken = user.ActivationCode;
+                    var generatepasswordlink = @Url.Action("resetPassword", "User", new { Email = user.Email, Token = passwordToken });
+                    return Ok(new { Message = "Success", Status = StatusCodes.Status201Created, Result = generatepasswordlink });
+                }
+                else
+                    return StatusCode(StatusCodes.Status403Forbidden, new { Message = "Failed", Status = StatusCodes.Status403Forbidden, Result = "User Not Found" });
+            }
+        }
+        [HttpPost]
+        [Route("api/[controller]/{version}/account/generateemailconfirmationlink")]
+        public async Task<IActionResult> generateEmailURl(string email, string version) 
+        {
+            string generateemailurl = "";
+            if (email == null && version != "1.0")
+            {
+                return BadRequest(StatusCode(StatusCodes.Status400BadRequest, new { Message = "Failed", Status = StatusCodes.Status400BadRequest, Result = "Email is not valid Please try again" }));
+            }
+            else
+            {
+                var Iuser = await _userManager.FindByEmailAsync(email);
+                if (Iuser == null)
+                {
+                    return StatusCode(StatusCodes.Status404NotFound, new { Message = "Failed", Status = StatusCodes.Status404NotFound, result = "Email not Found Please Try again" });
+                }
+                else
+                {
+                    if (Iuser.EmailConfirmed != true)
+                    {
+                        var code = await _userManager.GenerateEmailConfirmationTokenAsync(Iuser);
+                         generateemailurl = Url.ActionLink("emailConfirmation","User", new { userid = Iuser.Id, Token = code });
+                        if (generateemailurl == null)
+                        {
+                            return StatusCode(StatusCodes.Status500InternalServerError, new { Message = "Failed", Status = StatusCodes.Status500InternalServerError, Result = "Something went Wrong Please Contact your Administrator" });
+                        }
+                        return StatusCode(StatusCodes.Status405MethodNotAllowed, new { Message = "Failed", Status = StatusCodes.Status405MethodNotAllowed, Result = "User is already activated Please Login" });
+                    }
+                    else
+                        return StatusCode(StatusCodes.Status201Created, new { Message = "Success", Status = StatusCodes.Status201Created, Result = generateemailurl });
+                }
+            }
+        }
+        [HttpPost]
+        [Route("api/[controller]/{version}/account/PasswordReset")]
+        public async Task<IActionResult> PasswordReset(string email, string password, string confirmpassword, string version)
+        {
+            if(email == null && version != "1.0")
+            {
+                return BadRequest(StatusCode(StatusCodes.Status400BadRequest, new {Message ="Failed", Status = StatusCodes.Status400BadRequest, Result="Fields not entered"}));
+            }
+            else
+            {
+                var user = await _userManager.FindByEmailAsync(email);
+                if(user == null)
+                {
+                    return StatusCode(StatusCodes.Status401Unauthorized, new { Message = "Failed", Status = StatusCodes.Status401Unauthorized, Result ="User does not exist!. " });
+                }
+                else
+                {
+                    return Ok();
+                }
+            }
         }
     }
 }

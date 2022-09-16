@@ -1,4 +1,5 @@
 ﻿using EcomApp.Models.ActivtyLogModel;
+using EcomApp.Models.Users;
 using Microsoft.Extensions.Configuration;
 using MongoDB.Driver;
 
@@ -16,5 +17,6 @@ namespace EcomApp.DBConfigurations.MongoConfiguration
             _database = mongoClient.GetDatabase(_configuration["MongoDBConnection:DatabaseName"]);
         }
         public IMongoCollection<AuditLogsModel> auditlogs => _database.GetCollection<AuditLogsModel>("AuditLogs");
+        public IMongoCollection<ApplicationUser> users => _database.GetCollection<ApplicationUser>("Users");
     }
 }

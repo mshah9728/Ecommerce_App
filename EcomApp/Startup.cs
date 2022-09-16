@@ -18,7 +18,11 @@ using System.Threading.Tasks;
 using EcomApp.Services.AuditLogs;
 using EcomApp.Configuration.SQLConfiguration;
 using EcomApp.Configuration.CacheMemory;
-using EcomApp.Configuration.Json;
+using EcomApp.Configuration.JsonConfig;
+using EcomApp.Services.Authorization;
+using Microsoft.AspNetCore.Identity;
+using EcomApp.Services.Product;
+using EcomApp.Services.User;
 
 namespace EcomApp
 {
@@ -28,7 +32,7 @@ namespace EcomApp
         {
             Configuration = configuration;
         }
-
+        private readonly string corsPolicy = "Cors";
         public IConfiguration Configuration { get; }
 
         // This method gets called by the runtime. Use this method to add services to the container.
@@ -39,15 +43,18 @@ namespace EcomApp
             //Adding Services to Projects
             var mongodb = Configuration.GetSection(nameof(MongoDBConnection)).Get<MongoDBConnection>();
             services.AddSingleton(serviceProvider => (IMongoDBConnection)serviceProvider.GetRequiredService<IOptions<MongoDBConnection>>().Value);
-            services.AddScoped<ProductDBContext>();
-            services.AddScoped<TransactionDBContext>();
+            services.AddScoped<PosAppDB>();
+            //services.AddScoped<TransactionDBContext>();
             services.AddScoped<MongoDBContext>();
             services.AddTransient<IAuditLogsService, AuditLogsService>();
-            services.AddIdentity<ApplicationUser, ApplicationRole>().AddMongoDbStores<ApplicationUser, ApplicationRole, Guid>(mongodb.ConnectionString, mongodb.DatabaseName);
+            services.AddIdentity<ApplicationUser, ApplicationRole>().AddMongoDbStores<ApplicationUser, ApplicationRole, Guid>(mongodb.ConnectionString, mongodb.DatabaseName).AddTokenProvider<DataProtectorTokenProvider<ApplicationUser>>(TokenOptions.DefaultProvider);
             services.AddTransient<ICacheMemory, Cachememory>();
-            services.AddTransient<Ijson, Json>();
+            services.AddTransient<Ijson, _Json>();
+            services.AddTransient<IAuthUserService, AuthUserService>();
+            services.AddTransient<IProduct_LocationService, Product_LocationService>();
+            services.AddTransient<IUserService, UserService>();
             //Adding Dependency Injection of Redis cache
-            services.AddMemoryCache(); 
+            services.AddMemoryCache();
             services.AddStackExchangeRedisCache(options =>
             {
                 options.Configuration = Configuration["RedisConnection:Configuration"];
@@ -112,8 +119,8 @@ namespace EcomApp
                     }
                 };
             });
-            services.AddCors(
-                    options => options.AddPolicy("Cors",
+          var cors =  services.AddCors(
+                    options => options.AddPolicy(corsPolicy,
                         builder => builder.WithOrigins(
                                         // App:CorsOrigins in appsettings.json can contain more than one address separated by comma.
                                         Configuration["App:Cors"]
@@ -123,9 +130,10 @@ namespace EcomApp
                                     )
                                     .AllowAnyHeader()
                                     .AllowAnyMethod()
-                                .AllowCredentials()
+                                    .AllowCredentials()
             )
         );
+
         }
 
         // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
@@ -141,9 +149,10 @@ namespace EcomApp
             app.UseHttpsRedirection();
 
             app.UseRouting();
-            app.UseCors("Cors");
-            app.UseAuthentication();
+            app.UseCors(corsPolicy);
             app.UseAuthorization();
+            app.UseAuthentication();
+           
 
             app.UseEndpoints(endpoints =>
             {
